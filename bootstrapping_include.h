@@ -13,6 +13,7 @@
 #include <fstream>
 #include <stdio.h>
 #include <sstream>
+#include <ctime>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>

@@ -13,7 +13,8 @@ public:
     explicit BootstrappingType();
     ~BootstrappingType() {}
 
-    void SetLidarParameter( const double& in_lidar_height, const double& in_visibility_range );
+
+    void SetLidarParameter(const double& in_lidar_height,const double& in_visibility_range );
     void SetInputCloud( const PointCloudXYZ::ConstPtr input_cloud );
     void LoadDStreeXML( const char in_load_file[] );
     void GenerateSetValueGridMap( const double &in_grid_length );
@@ -26,6 +27,10 @@ public:
     void WriteDataToTXTFile( const std::string in_file_rout, const std::vector<std::vector<double> > in_data_vec );
     void UseDSTreePredictCloud( PointCloudXYZ::Ptr out_obstacle_cloud );
     float EvaluateDSTreePredictAccuracy( cv::Mat& predicted, cv::Mat& actual );
+    void EuclideanCluster( PointCLoudXYZRGB::Ptr output_cloud_ptr,
+                           const double in_cluster_distance_thre = 0.2,
+                           const unsigned int in_cluster_min_size = 20,
+                           const unsigned int in_cluster_max_size = 1000);
 
 
 
@@ -63,7 +68,18 @@ private:
     PointCloudXYZ::Ptr classified_obstacle_cloud_ptr_;
     PointCloudXYZ::Ptr feature_calculate_cloud_ptr_;
     CvDTree *ds_tree_ptr_;
+
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr kd_tree_;
+    PointCloudXYZ::Ptr cluster_cloud_2d_;
+    std::vector<pcl::PointIndices> cluster_indices_;
+    unsigned int cluster_min_size_;
+    unsigned int cluster_max_size_;
+    float cluster_distance_threshold_;
+    pcl::EuclideanClusterExtraction<pcl::PointXYZ> euclidean_cluster_extrator_;
+    std::vector<PointCLoudXYZRGB> colored_cluster_cloud_vec_;
+
     std::vector< PointFeatureStruct > under_predict_point_vec_;
+    std::vector< std::vector<unsigned int> > under_predict_point_num_vec_;// point's row and column num
     PointCloudXYZ::Ptr predict_ground_cloud_ptr_;
     PointCloudXYZ::Ptr predict_obstacle_cloud_ptr_;
     std::vector< std::vector< PointFlag > > point_cloud_flag_;// 16*2016

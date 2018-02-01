@@ -14,7 +14,12 @@ BootstrappingType::BootstrappingType()
     predict_ground_cloud_ptr_.reset( new PointCloudXYZ );
     predict_obstacle_cloud_ptr_.reset( new PointCloudXYZ );
     ds_tree_ptr_ = new CvDTree;
+    kd_tree_.reset( new pcl::search::KdTree<pcl::PointXYZ> );
+    cluster_cloud_2d_.reset( new pcl::PointCloud<pcl::PointXYZ> );
 
+    cluster_min_size_ = 20;
+    cluster_max_size_ = 10000;
+    cluster_distance_threshold_ = 0.5;
     is_initial_ = false;
 }
 
@@ -63,6 +68,7 @@ void BootstrappingType::ShowCloudInRvizInterface( PointCloudXYZ::Ptr out_show_cl
 void BootstrappingType::SetInputCloud( const PointCloudXYZ::ConstPtr in_cloud )
 {
     this->clearOldPointCloudData();
+
     *origin_cloud_ptr_ = *in_cloud;
     RS_LiDAR_.row_size = in_cloud->height;
     RS_LiDAR_.column_size = in_cloud->width;
@@ -110,6 +116,7 @@ void BootstrappingType::clearOldPointCloudData()
     classified_obstacle_cloud_ptr_->clear();
     feature_calculate_cloud_ptr_->clear();
     under_predict_point_vec_.clear();
+    under_predict_point_num_vec_.clear();
     predict_ground_cloud_ptr_->clear();
     predict_obstacle_cloud_ptr_->clear();
     point_cloud_flag_.clear();
@@ -119,6 +126,9 @@ void BootstrappingType::clearOldPointCloudData()
     grid_cell_points_property_.clear();
     grid_statistic_feature_vec_.clear();
     terrain_height_estimation_vec_.clear();
+    cluster_cloud_2d_->clear();
+    cluster_indices_.clear();
+    colored_cluster_cloud_vec_.clear();
 
     is_initial_= false;
 }
@@ -411,6 +421,10 @@ void BootstrappingType::calculatePointFlag()
             {
                 point_cloud_flag_[i][j].point_property = ground_point;
             }
+            else if ( grid_map_property_vec_[temp_x_grid_num][temp_y_grid_num] == obstacle_cell )
+            {
+                point_cloud_flag_[i][j].point_property = obstacle_point;
+            }
         }
     }
 }
@@ -631,6 +645,8 @@ void BootstrappingType::calculatePhiGradient(  )
 
 void BootstrappingType::generateOpenCVDSTreePredictDataType( )
 {
+    std::vector<unsigned int> temp_num;
+    temp_num.resize(2);
     for (int i = 0; i < cloud_point_feature_vec_.size(); ++i)
     {
         for (int j = 0; j < cloud_point_feature_vec_[i].size(); ++j)
@@ -638,6 +654,8 @@ void BootstrappingType::generateOpenCVDSTreePredictDataType( )
             if ( !cloud_point_feature_vec_[i][j].isEmpty() )
             {
                 under_predict_point_vec_.push_back( cloud_point_feature_vec_[i][j] );
+                temp_num[0] = i;  temp_num[1] = j;
+                under_predict_point_num_vec_.push_back( temp_num );
             }
         }
     }
@@ -653,7 +671,7 @@ void BootstrappingType::WriteDataToTXTFile( const std::string in_file_rout, cons
         std::cerr << "Fail to open txt file!" << std::endl;
 }
 
-void BootstrappingType::UseDSTreePredictCloud( PointCloudXYZ::Ptr out_ground_cloud )
+void BootstrappingType::UseDSTreePredictCloud( PointCloudXYZ::Ptr out_cloud_ptr )
 {
     if (!is_initial_)
     {
@@ -667,29 +685,25 @@ void BootstrappingType::UseDSTreePredictCloud( PointCloudXYZ::Ptr out_ground_clo
     this->generateOpenCVDSTreePredictDataType();
 
     // 2.trans to cv::Mat
-    unsigned int temp_points_size = cloud_point_feature_vec_.size() * cloud_point_feature_vec_[0].size();
-    float under_predict_feature_mat[ temp_points_size ][8];
-    unsigned int under_predict_xy_mat[ temp_points_size ][2];
-    for (int i = 0; i < cloud_point_feature_vec_.size(); ++i)
+    float under_predict_feature_mat[ under_predict_point_vec_.size() ][8];
+    unsigned int under_predict_xy_mat[ under_predict_point_vec_.size() ][2];
+    for (int i = 0; i < under_predict_point_vec_.size(); ++i)
     {
-        for (int j = 0; j < cloud_point_feature_vec_[i].size(); ++j)
-        {
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][0] = cloud_point_feature_vec_[i][j].self_range;
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][1] = cloud_point_feature_vec_[i][j].remission;
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][2] = cloud_point_feature_vec_[i][j].left_minus_self;
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][3] = cloud_point_feature_vec_[i][j].right_minus_self;
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][4] = cloud_point_feature_vec_[i][j].top_minus_self;
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][5] = cloud_point_feature_vec_[i][j].bottom_minus_self;
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][6] = cloud_point_feature_vec_[i][j].lidar_height;
-            under_predict_feature_mat[ i*cloud_point_feature_vec_[0].size() + j ][7] = cloud_point_feature_vec_[i][j].height_above_lowest;
+        under_predict_feature_mat[i][0] = under_predict_point_vec_[i].self_range;
+        under_predict_feature_mat[i][1] = under_predict_point_vec_[i].remission;
+        under_predict_feature_mat[i][2] = under_predict_point_vec_[i].left_minus_self;
+        under_predict_feature_mat[i][3] = under_predict_point_vec_[i].right_minus_self;
+        under_predict_feature_mat[i][4] = under_predict_point_vec_[i].top_minus_self;
+        under_predict_feature_mat[i][5] = under_predict_point_vec_[i].bottom_minus_self;
+        under_predict_feature_mat[i][6] = under_predict_point_vec_[i].lidar_height;
+        under_predict_feature_mat[i][7] = under_predict_point_vec_[i].height_above_lowest;
 
-            under_predict_xy_mat[ i*cloud_point_feature_vec_[0].size() + j ][0] = i;
-            under_predict_xy_mat[ i*cloud_point_feature_vec_[0].size() + j ][1] = j;
-        }
+        under_predict_xy_mat[i][0] = under_predict_point_num_vec_[i][0];
+        under_predict_xy_mat[i][1] = under_predict_point_num_vec_[i][1];
     }
-    cv::Mat under_predict_feature_cvmat( temp_points_size, 8, CV_32F, under_predict_feature_mat );
-    cv::Mat predicted_value( temp_points_size, 1, CV_32F );
-    for (int k = 0; k < temp_points_size; ++k)
+    cv::Mat under_predict_feature_cvmat( under_predict_point_vec_.size(), 8, CV_32F, under_predict_feature_mat );
+    cv::Mat predicted_value( under_predict_point_vec_.size(), 1, CV_32F );
+    for (int k = 0; k < under_predict_point_vec_.size(); ++k)
     {
         const cv::Mat sample = under_predict_feature_cvmat.row(k);
         CvDTreeNode* prediction = ds_tree_ptr_->predict( sample );
@@ -704,8 +718,8 @@ void BootstrappingType::UseDSTreePredictCloud( PointCloudXYZ::Ptr out_ground_clo
         }
     }
 
-    *out_ground_cloud = *predict_ground_cloud_ptr_;
-    predict_ground_cloud_ptr_->clear();
+    *out_cloud_ptr = *predict_ground_cloud_ptr_;
+
 }
 
 float BootstrappingType::EvaluateDSTreePredictAccuracy( cv::Mat& predicted, cv::Mat& actual )
@@ -726,6 +740,58 @@ float BootstrappingType::EvaluateDSTreePredictAccuracy( cv::Mat& predicted, cv::
         }
     }
     return (t * 1.0) / (t + f);
+}
+
+void BootstrappingType::EuclideanCluster( PointCLoudXYZRGB::Ptr output_cloud_ptr,
+                                          const double in_cluster_distance_thre,
+                                          const unsigned int in_cluster_min_size,
+                                          const unsigned int in_cluster_max_size)
+{
+    cluster_min_size_ = in_cluster_min_size;
+    cluster_max_size_ = in_cluster_max_size;
+    cluster_distance_threshold_ = in_cluster_distance_thre;
+
+    // make point cloud flat
+    pcl::copyPointCloud( *predict_obstacle_cloud_ptr_, *cluster_cloud_2d_ );
+    for (size_t i = 0; i < cluster_cloud_2d_->points.size(); i++)
+        cluster_cloud_2d_->points[i].z = 0;
+
+
+    std::vector<int> temp_indicates;
+    pcl::removeNaNFromPointCloud( *cluster_cloud_2d_, *cluster_cloud_2d_, temp_indicates );
+    if ( cluster_cloud_2d_->points.size() > 0 )
+        kd_tree_->setInputCloud( cluster_cloud_2d_ );
+
+    // perform clustering on 2d cloud
+    euclidean_cluster_extrator_.setClusterTolerance ( cluster_distance_threshold_ );
+    euclidean_cluster_extrator_.setMinClusterSize ( cluster_min_size_ );
+    euclidean_cluster_extrator_.setMaxClusterSize ( cluster_max_size_ );
+    euclidean_cluster_extrator_.setSearchMethod( kd_tree_ );
+    euclidean_cluster_extrator_.setInputCloud( cluster_cloud_2d_ );
+    euclidean_cluster_extrator_.extract ( cluster_indices_ );
+    // colour clustered points
+    unsigned int k = 0;
+    colored_cluster_cloud_vec_.resize( cluster_indices_.size() );
+    unsigned int temp_single_cluster_points = 0;
+    for(std::vector<pcl::PointIndices>::iterator iter = cluster_indices_.begin(); iter != cluster_indices_.end(); ++iter )
+    {
+        unsigned int cloud_color_rgb[3];
+        cloud_color_rgb[0] = rand()%255;
+        cloud_color_rgb[1] = rand()%255;
+        cloud_color_rgb[2] = rand()%255;
+        for (std::vector<int>::iterator i = iter->indices.begin(); i != iter->indices.end() ; ++i)
+        {
+            pcl::PointXYZRGB p;
+            p.x = predict_obstacle_cloud_ptr_->points[*i].x;
+            p.y = predict_obstacle_cloud_ptr_->points[*i].y;
+            p.z = predict_obstacle_cloud_ptr_->points[*i].z;
+            p.r = cloud_color_rgb[0];
+            p.g = cloud_color_rgb[1];
+            p.b = cloud_color_rgb[2];
+
+            output_cloud_ptr->push_back( p );
+        }
+    }
 }
 
 

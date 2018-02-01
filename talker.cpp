@@ -185,16 +185,27 @@
 static ros::Publisher g_chatter_pub;
 static BootstrappingType *test_cloud = new BootstrappingType;
 static PointCloudXYZ::Ptr out_show_cloud_ptr ( new PointCloudXYZ );
+static PointCLoudXYZRGB::Ptr out_color_cloud_ptr( new PointCLoudXYZRGB );
+static clock_t time_start, time_finish;
 
 void ClassifyCloudPointInDStreeModel( PointCloudXYZ::Ptr input_cloud_ptr )
 {
+    time_start = clock();
     input_cloud_ptr->header.frame_id = "rslidar";
     test_cloud->SetInputCloud( input_cloud_ptr );
     test_cloud->UseDSTreePredictCloud( out_show_cloud_ptr );
     out_show_cloud_ptr->header.frame_id = "rslidar";
     g_chatter_pub.publish( out_show_cloud_ptr );
 
+//    test_cloud->EuclideanCluster( 0.6, 20, 10000, out_color_cloud_ptr );
+//    out_color_cloud_ptr->header.frame_id = "rslidar";
+//    g_chatter_pub.publish( out_color_cloud_ptr );
+
     out_show_cloud_ptr->clear();
+    out_color_cloud_ptr->clear();
+
+    time_finish=clock();
+    std::cout << (float)(time_finish - time_start) / 1000  << " (ms) "<< std::endl;
 }
 
 int main(int argc, char **argv)
